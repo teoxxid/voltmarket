@@ -3,43 +3,58 @@ import { Navigate, useLocation } from 'react-router-dom';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
-  user: { username: string; role: string } | null;
-  isLoading: boolean;
-  allowedRoles?: string[];  // ['USER'], ['ADMIN'], ['USER', 'ADMIN']
-  fallbackPath?: string;    // Куда редиректить при отказе в доступе
+  isAuthenticated: boolean;
+  isAuthChecked: boolean; // 🔹 Обязательный проп: завершена ли проверка авторизации
+  isLoading?: boolean;
+  adminOnly?: boolean;
+  user?: { role: string } | null;
 }
 
-export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
-  children,
-  user,
-  isLoading,
-  allowedRoles = ['USER', 'ADMIN'],  // По умолчанию доступно всем авторизованным
-  fallbackPath = '/pages/user-page/'
+export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ 
+  children, 
+  isAuthenticated, 
+  isAuthChecked,
+  isLoading = false,
+  adminOnly,
+  user 
 }) => {
   const location = useLocation();
 
-  // Пока загружается авторизация — показываем лоадер
-  if (isLoading) {
+  // 🔹 Если авторизация ещё не проверена — показываем лоадер
+  if (!isAuthChecked || isLoading) {
     return (
-      <div style={{ padding: 50, textAlign: 'center', fontSize: 18, color: '#666' }}>
+      <div style={{ 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'center', 
+        minHeight: '60vh',
+        color: '#64748b',
+        fontSize: '16px'
+      }}>
+        <div className="loader-spinner" style={{ 
+          width: '32px', 
+          height: '32px', 
+          marginRight: '12px',
+          borderWidth: '3px',
+          border: '3px solid #e2e8f0',
+          borderTop: '3px solid #005bff',
+          borderRadius: '50%',
+          animation: 'spin 0.8s linear infinite'
+        }} />
         Проверка авторизации...
       </div>
     );
   }
 
-  // Если пользователь не авторизован — редирект на логин
-  if (!user) {
-    console.log(`[ProtectedRoute] Access denied: not authenticated | path=${location.pathname}`);
-    return <Navigate to="/login/" state={{ from: location }} replace />;
+  // 🔹 Если проверка завершена и пользователь НЕ авторизован — редирект на логин
+  if (!isAuthenticated) {
+    return <Navigate to="/login" state={{ from: location.pathname }} replace />;
   }
-
-  // Если указана проверка роли и роль пользователя не подходит
-  if (allowedRoles && !allowedRoles.includes(user.role)) {
-    console.log(`[ProtectedRoute] Access denied: role mismatch | user=${user.username} | role=${user.role} | allowed=${allowedRoles.join(',')} | path=${location.pathname}`);
-    return <Navigate to={fallbackPath} replace />;
+  
+  // 🔹 Проверка прав администратора
+  if (adminOnly && user?.role !== 'ADMIN') {
+    return <Navigate to="/user-page/" replace />;
   }
-
-  // Все проверки пройдены — рендерим компонент
-  console.log(`[ProtectedRoute] Access granted | user=${user.username} | role=${user.role} | path=${location.pathname}`);
+  
   return <>{children}</>;
 };

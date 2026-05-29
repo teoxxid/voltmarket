@@ -39,13 +39,13 @@ export function useCachedFetch(url, ttl = DEFAULT_TTL) {
     setLoading(true);
 
     fetch(url)
-      .then(res => res.json())
-      .then(json => {
+      .then((res) => res.json())
+      .then((json) => {
         setData(json);
         localStorage.setItem(cacheKey, JSON.stringify({ data: json, timestamp: now }));
         console.log(`[CACHE] SET for ${url}. TTL: ${ttl}ms`);
       })
-      .catch(err => {
+      .catch((err) => {
         console.error(`[CACHE] ERROR fetching ${url}:`, err);
         setCacheStatus('ERROR');
       })

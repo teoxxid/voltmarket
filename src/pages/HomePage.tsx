@@ -1,155 +1,137 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+
+interface Service {
+  id: number;
+  name: string;
+  price: number;
+  image_url?: string;
+  category?: string;
+}
 
 interface HomePageProps {
   user: { username: string; role: 'USER' | 'ADMIN' } | null;
+  services?: Service[];
+  background_video_url?: string;
 }
 
-const HomePage: React.FC<HomePageProps> = ({ user }) => {
+const HomePage: React.FC<HomePageProps> = ({ 
+  user, 
+  services: propServices, 
+  background_video_url = 'http://localhost:9000/services/background.mp4'
+}) => {
+  const [popularServices, setPopularServices] = useState<Service[]>([]);
+  const [loadingServices, setLoadingServices] = useState(true);
+
+  useEffect(() => {
+    if (propServices && propServices.length > 0) {
+      setPopularServices(propServices);
+      setLoadingServices(false);
+      return;
+    }
+
+    const fetchPopular = async () => {
+      try {
+        const res = await fetch('/api/services/?limit=4');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        
+        const data = json.results || json.data || json;
+        const servicesList = Array.isArray(data) ? data : [];
+        
+        setPopularServices(servicesList.slice(0, 4));
+      } catch (err) {
+        console.error('Failed to fetch popular services:', err);
+        setPopularServices([]);
+      } finally {
+        setLoadingServices(false);
+      }
+    };
+
+    fetchPopular();
+  }, [propServices]);
+
+  const services = propServices && propServices.length > 0 ? propServices : popularServices;
+
   return (
-    <div style={{ 
-      maxWidth: 800, 
-      margin: '50px auto', 
-      padding: 24, 
-      background: 'white',
-      borderRadius: 12,
-      boxShadow: '0 4px 20px rgba(0,0,0,0.08)'
-    }}>
-      <h1 style={{ 
-        marginBottom: 24, 
-        color: '#1e293b',
-        textAlign: 'center',
-        fontSize: 28
-      }}>
-        ⚡ Добро пожаловать в VoltMarket
-      </h1>
-      
-      {user ? (
-        <div style={{ 
-          padding: 20, 
-          background: '#f8fafc', 
-          borderRadius: 8,
-          border: '1px solid #e2e8f0'
-        }}>
-          <p style={{ marginBottom: 8, fontSize: 16 }}>
-            👋 Вы вошли как <strong style={{ color: '#2563eb' }}>{user.username}</strong>
-          </p>
-          <p style={{ marginBottom: 24, fontSize: 14, color: '#64748b' }}>
-            Роль: <span style={{ 
-              padding: '4px 12px', 
-              borderRadius: 20, 
-              background: user.role === 'ADMIN' ? '#dc2626' : '#2563eb',
-              color: 'white',
-              fontSize: 12,
-              fontWeight: 500
-            }}>
-              {user.role}
-            </span>
-          </p>
-          
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            {/* 🔹 Ссылка на User Page — правильный путь с /pages/ и слэшем */}
-            <Link to="/pages/user-page/" style={{ textDecoration: 'none' }}>
-              <button style={{ 
-                padding: '10px 20px', 
-                background: '#2563eb', 
-                color: 'white', 
-                border: 'none', 
-                borderRadius: 6,
-                cursor: 'pointer',
-                fontWeight: 500,
-                transition: 'background 0.2s'
-              }}
-              onMouseOver={e => (e.currentTarget.style.background = '#1d4ed8')}
-              onMouseOut={e => (e.currentTarget.style.background = '#2563eb')}
-              >
-                👤 User Dashboard
-              </button>
-            </Link>
-            
-            {/* 🔹 Кнопка только для ADMIN — путь тоже исправлен */}
-            {user.role === 'ADMIN' && (
-              <Link to="/pages/admin-page/" style={{ textDecoration: 'none' }}>
-                <button style={{ 
-                  padding: '10px 20px', 
-                  background: '#dc2626', 
-                  color: 'white', 
-                  border: 'none', 
-                  borderRadius: 6,
-                  cursor: 'pointer',
-                  fontWeight: 500,
-                  transition: 'background 0.2s'
-                }}
-                onMouseOver={e => (e.currentTarget.style.background = '#b91c1c')}
-                onMouseOut={e => (e.currentTarget.style.background = '#dc2626')}
-                >
-                  🛡️ Admin Panel
-                </button>
-              </Link>
-            )}
-            
-            {/* 🔹 Дополнительные ссылки для удобства */}
-            <Link to="/pages/catalog/" style={{ textDecoration: 'none' }}>
-              <button style={{ 
-                padding: '10px 20px', 
-                background: '#64748b', 
-                color: 'white', 
-                border: 'none', 
-                borderRadius: 6,
-                cursor: 'pointer',
-                fontWeight: 500
-              }}>
-                🛒 В каталог
-              </button>
-            </Link>
-          </div>
+    <>
+      {/* 🔹 Геро-секция с видео */}
+      <section className="hero-section">
+        <video
+          key={background_video_url}
+          autoPlay
+          muted
+          loop
+          playsInline
+          className="hero-background-video"
+          onLoadedData={() => console.log('✅ Video loaded:', background_video_url)}
+          onError={(e) => console.error('❌ Video error:', e)}
+        >
+          <source src={background_video_url} type="video/mp4" />
+          Ваш браузер не поддерживает видео.
+        </video>
+        
+        <div className="hero-overlay">
+          <h1>Маркетплейс электронной техники</h1>
+          <p>Лучшие товары от лучших производителей</p>
+          <Link to="/catalog/" className="hero-btn">Перейти в каталог</Link>
         </div>
-      ) : (
-        <div style={{ 
-          padding: 24, 
-          textAlign: 'center',
-          background: '#fef2f2',
-          borderRadius: 8,
-          border: '1px solid #fecaca'
-        }}>
-          <p style={{ marginBottom: 20, color: '#64748b', fontSize: 16 }}>
-            🔐 Вы не авторизованы
-          </p>
-          <Link to="/login/" style={{ textDecoration: 'none' }}>
-            <button style={{ 
-              padding: '12px 24px', 
-              background: '#2563eb', 
-              color: 'white', 
-              border: 'none', 
-              borderRadius: 6,
-              cursor: 'pointer',
-              fontWeight: 500,
-              fontSize: 16
-            }}>
-              Войти в систему
-            </button>
-          </Link>
-          <p style={{ marginTop: 16, fontSize: 13, color: '#94a3b8' }}>
-            Или <Link to="/register/" style={{ color: '#2563eb' }}>зарегистрируйтесь</Link>
+      </section>
+
+      {/* 🔹 Популярные товары (первые 4) */}
+      <section className="video-catalog">
+        <h2>Популярные товары</h2>
+        
+        {loadingServices ? (
+          <p style={{textAlign:'center',color:'#666',padding:'40px'}}>Загрузка товаров...</p>
+        ) : services.length > 0 ? (
+          <div className="video-grid">
+            {services.slice(0, 4).map((service) => (
+              <div key={service.id} className="video-card">
+                <Link to={`/service/${service.id}/`} className="video-thumbnail-link">
+                  <div className="video-thumbnail">
+                    <img 
+                      src={service.image_url || '/placeholder.svg'} 
+                      alt={service.name}
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = '/placeholder.svg';
+                      }}
+                      loading="lazy"
+                    />
+                  </div>
+                </Link>
+                <div className="video-info">
+                  <h3>{service.name}</h3>
+                  <p className="price">{service.price.toLocaleString('ru-RU')} ₽</p>
+                  {service.category && <p className="category">{service.category}</p>}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p style={{textAlign:'center',color:'#666',padding:'40px'}}>Товары временно недоступны</p>
+        )}
+      </section>
+
+      {/* 🔹 CTA блок */}
+      <section className="cta-section">
+        <div className="cta-content">
+          <h2>Готовы сделать заказ?</h2>
+          <p>Перейдите в каталог и выберите нужные товары</p>
+          <Link to="/catalog/" className="cta-btn">Перейти в каталог</Link>
+        </div>
+      </section>
+
+      {/* 🔹 Подсказка для гостей */}
+      {!user && (
+        <div className="guest-hint">
+          <p>
+            <Link to="/login/">Войдите</Link> или <Link to="/register/">зарегистрируйтесь</Link>, 
+            чтобы оформлять заявки и отслеживать их статус
           </p>
         </div>
       )}
-      
-      {/* 🔹 Информационный блок для тестирования */}
-      <div style={{ 
-        marginTop: 32, 
-        padding: '16px 20px', 
-        background: '#f1f5f9', 
-        borderRadius: 8,
-        fontSize: 13,
-        color: '#64748b'
-      }}>
-        <strong>💡 Тестовые аккаунты:</strong><br/>
-        • Админ: <code>admin / admin123</code> (роль: ADMIN)<br/>
-        • Пользователь: <code>user1 / userpass123</code> (роль: USER)<br/>
-        • Каталог доступен всем авторизованным пользователям
-      </div>
-    </div>
+    </>
   );
 };
 

@@ -1,6 +1,6 @@
 import { pipeline, env } from '@huggingface/transformers';
 
-// 🔹 Отключаем лишние логи библиотеки
+// Отключаем лишние логи библиотеки
 env.allowLocalModels = false;
 env.useBrowserCache = true;
 env.remoteHost = 'https://cdn.jsdelivr.net/npm/@huggingface/';
@@ -10,18 +10,15 @@ let extractor: any = null;
 
 export async function getEmbedding(text: string): Promise<number[]> {
   if (!extractor) {
-    // 🔹 Тихая загрузка модели (без логов)
-    extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
-      quantized: true,
-      progress_callback: null, // отключаем прогресс-бар
-    });
+    // Загрузка модели (без лишних опций)
+    extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
   }
-  
-  const output = await extractor(text, { 
-    pooling: 'mean', 
-    normalize: true 
+
+  const output = await extractor(text, {
+    pooling: 'mean',
+    normalize: true,
   });
-  
+
   return Array.from(output.data);
 }
 

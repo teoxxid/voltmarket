@@ -1,374 +1,348 @@
-import { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
-import { getEmbedding, cosineSimilarity } from '../utils/similarity';
+import React, { useState, useEffect } from 'react';
+import { useParams, Link } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
+import type { RootState, AppDispatch } from '../store';
+import { showNotification } from '../store/slices/uiSlice';
+import { addToCartThunk, fetchCartIconThunk } from '../store/thunks/orderThunks';
 
-// 🔹 Интерфейс для услуги
-export interface Service {
+interface Service {
   id: number;
   name: string;
   description: string;
   price: number;
-  category: string;
-  image_url?: string;
-  video_url?: string;
+  category?: string;
   brand?: string;
   rating?: number;
-  weight?: number;
+  weight?: number | string;
+  image_url?: string;
+  video_url?: string;
   status?: string;
-  [key: string]: any;
 }
 
-// 🔹 Mock-данные для Лабы 6 (требование: "fallback при отсутствии доступа")
-const mockServices: Service[] = [
-  { id: 1, name: "iPhone 16 Pro", description: "Флагманский смартфон с процессором A18 Pro и титановым корпусом", price: 120000, category: "Смартфоны", image_url: "http://localhost:9000/services/iphone16pro.jpg" },
-  { id: 2, name: "Samsung Galaxy S24", description: "Премиум смартфон с ИИ-функциями и отличным дисплеем", price: 95000, category: "Смартфоны", image_url: "http://localhost:9000/services/galaxys24.jpg" },
-  { id: 3, name: "MacBook Pro 14", description: "Профессиональный ноутбук с чипом M3 для сложных задач", price: 180000, category: "Ноутбуки", image_url: "http://localhost:9000/services/macbookpro14.jpg" },
-  { id: 4, name: "Sony WH-1000XM5", description: "Беспроводные наушники с шумоподавлением премиум-класса", price: 35000, category: "Аудио", image_url: "http://localhost:9000/services/sonywh1000xm5.jpg" },
-  { id: 5, name: "LG OLED C3", description: "4K OLED телевизор с поддержкой Dolby Vision и игровыми режимами", price: 150000, category: "Телевизоры", image_url: "http://localhost:9000/services/lgoledc3.jpg" },
-  { id: 6, name: "iPhone 15 Pro", description: "Прошлогодний флагман с отличной камерой", price: 99000, category: "Смартфоны", image_url: "http://localhost:9000/services/iphone15pro.jpg" },
-];
+const MINIO_BASE_URL = 'http://localhost:9000/services';
 
-const ServiceDetail = () => {
+const ServiceDetail: React.FC = () => {
   const { serviceId } = useParams<{ serviceId: string }>();
-  const serviceIdNum = serviceId ? parseInt(serviceId, 10) : 0;
+  const dispatch = useDispatch<AppDispatch>();
+  
+  const [service, setService] = useState<Service | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [addingToCart, setAddingToCart] = useState(false);
+  const [hasVideoError, setHasVideoError] = useState(false);
+  const [relatedServices, setRelatedServices] = useState<Service[]>([]);
+  
+  const user = useSelector((state: RootState) => state.auth.user);
+  const isGlobalLoading = useSelector((state: RootState) => state.ui.loading);
 
-  const [currentService, setCurrentService] = useState<Service | null>(null);
-  const [similarServices, setSimilarServices] = useState<Service[]>([]);
-  const [loadingSimilar, setLoadingSimilar] = useState(false);
-  const [useFallback, setUseFallback] = useState(false);
-
-  // 🔹 Загрузка текущей услуги
   useEffect(() => {
-    if (!serviceIdNum) return;
-
+    if (!serviceId) return;
+    
     const fetchService = async () => {
       try {
-        const res = await fetch(`/api/services/${serviceIdNum}/`);
+        const res = await fetch(`/api/services/${serviceId}/`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = await res.json();
         const serviceData = json.data || json;
-        setCurrentService(serviceData);
-      } catch {
-        // Тихий fallback на mock, если бэкенд недоступен
-        const mock = mockServices.find(s => s.id === serviceIdNum);
-        setCurrentService(mock || null);
-      }
-    };
-    fetchService();
-  }, [serviceIdNum]);
-
-  // 🔹 Вычисление похожих товаров
-  useEffect(() => {
-    if (!currentService) return;
-
-    const findSimilar = async () => {
-      setLoadingSimilar(true);
-      let allServices: Service[] = [];
-
-      try {
-        const res = await fetch('/api/services/');
-        if (!res.ok) throw new Error('Network error');
-        const json = await res.json();
-        allServices = json.data || [];
-      } catch {
-        // Тихий fallback на mock, если бэкенд недоступен
-        allServices = mockServices;
-      }
-
-      try {
-        // 🔹 Transformer.js: вычисление эмбеддингов (может упасть, если CDN заблокирован)
-        const currentEmbedding = await getEmbedding(currentService.description);
-        const others = allServices.filter(s => s.id !== serviceIdNum && s.description?.trim());
         
-        const scored = await Promise.all(
-          others.map(async (s) => {
-            const emb = await getEmbedding(s.description);
-            return { ...s, score: cosineSimilarity(currentEmbedding, emb) };
-          })
-        );
-
-        const top3 = scored.sort((a, b) => b.score - a.score).slice(0, 3);
-        setSimilarServices(top3);
-        setUseFallback(false);
-        
-      } catch {
-        // 🔹 Тихий fallback: по категории → любые 3 товара (без логов в консоль)
-        const currentCat = (currentService.category || '').trim().toLowerCase();
-        
-        const byCategory = allServices.filter(s => {
-          const sCat = (s.category || '').trim().toLowerCase();
-          return s.id !== serviceIdNum && sCat && sCat === currentCat;
-        }).slice(0, 3);
-        
-        if (byCategory.length > 0) {
-          setSimilarServices(byCategory);
-          setUseFallback(true);
-        } else {
-          // Если категория пуста — покажем любые 3 других товара
-          const anyOthers = allServices.filter(s => s.id !== serviceIdNum).slice(0, 3);
-          setSimilarServices(anyOthers);
-          setUseFallback(true);
+        if (serviceData && !serviceData.video_url && serviceData.name) {
+          const possibleVideoName = serviceData.name.toLowerCase()
+            .replace(/\s+/g, '')
+            .replace(/[^\w\-]/g, '') + '.mp4';
+          const possibleVideoUrl = `${MINIO_BASE_URL}/${possibleVideoName}`;
+          
+          try {
+            const checkRes = await fetch(possibleVideoUrl, { method: 'HEAD' });
+            if (checkRes.ok) {
+              serviceData.video_url = possibleVideoUrl;
+            }
+          } catch {
+          }
         }
+        
+        setService(serviceData);
+        
+        // 🔹 Загружаем похожие товары ТОЛЬКО по категории
+        if (serviceData?.category) {
+          try {
+            const relatedRes = await fetch(`/api/services/?category=${encodeURIComponent(serviceData.category)}&limit=4`);
+            if (relatedRes.ok) {
+              const relatedJson = await relatedRes.json();
+              const relatedData = relatedJson.results || relatedJson.data || relatedJson;
+              const relatedList = Array.isArray(relatedData) ? relatedData : [];
+              setRelatedServices(relatedList.filter((s: Service) => s.id !== serviceData.id).slice(0, 4));
+            }
+          } catch (e) {
+            console.warn('Failed to fetch related by category:', e);
+            setRelatedServices([]);
+          }
+        } else {
+          setRelatedServices([]);
+        }
+      } catch (err) {
+        console.error('Failed to fetch service:', err);
+        dispatch(showNotification({ type: 'error', message: 'Ошибка загрузки товара' }));
       } finally {
-        setLoadingSimilar(false);
+        setLoading(false);
       }
     };
+    
+    fetchService();
+  }, [serviceId, dispatch]);
 
-    findSimilar();
-  }, [currentService, serviceIdNum]);
+  const handleAddToCart = async () => {
+    if (!service) return;
+    
+    if (!user) {
+      dispatch(showNotification({ 
+        type: 'info', 
+        message: 'Войдите, чтобы добавить товар в заказ' 
+      }));
+      return;
+    }
+    
+    setAddingToCart(true);
+    
+    // 🔹 Диспатчим thunk и ждём результат
+    const result = await dispatch(addToCartThunk(service.id));
+    
+    // 🔹 Проверяем результат
+    if (addToCartThunk.fulfilled.match(result)) {
+      // ✅ Успех — уведомление уже показано в thunk, но можно продублировать
+      dispatch(showNotification({ 
+        type: 'success', 
+        message: `${service.name} добавлен в заказ` 
+      }));
+      
+      // 🔹 Обновляем иконку корзины в навбаре
+      dispatch(fetchCartIconThunk());
+    } else {
+      // ❌ Ошибка
+      dispatch(showNotification({ 
+        type: 'error', 
+        message: (result.payload as string) || 'Ошибка добавления в заказ' 
+      }));
+    }
+    setAddingToCart(false);
+  };
 
-  if (!currentService) {
+  if (loading) {
     return (
-      <div style={{ padding: 50, textAlign: 'center', fontFamily: 'sans-serif' }}>
-        <p>⏳ Загрузка информации о товаре...</p>
+      <div className="container" style={{ padding: 50, textAlign: 'center' }}>
+        <div className="loader-spinner" style={{ margin: '0 auto 20px' }}></div>
+        <p>Загрузка товара...</p>
       </div>
     );
   }
 
-  return (
-    <div style={{ 
-      fontFamily: 'system-ui, -apple-system, sans-serif', 
-      maxWidth: 1200, 
-      margin: '0 auto', 
-      padding: 20 
-    }}>
-      {/* 🔹 Хедер с кнопкой "Назад" */}
-      <div style={{ marginBottom: 20 }}>
-        <a href="/pages/catalog/" style={{ 
-          display: 'inline-flex', 
-          alignItems: 'center', 
-          gap: 8, 
-          color: '#2563eb', 
-          textDecoration: 'none',
-          fontWeight: 500
-        }}>
-          ← Назад к каталогу
-        </a>
+  if (!service) {
+    return (
+      <div className="container">
+        <div className="not-found-card">
+          <h1 className="not-found-code">404</h1>
+          <p>Товар не найден</p>
+          <Link to="/catalog/" className="btn btn-primary">Вернуться в каталог</Link>
+        </div>
       </div>
+    );
+  }
 
-      {/* 🔹 Основной контент: картинка + инфо */}
-      <div style={{ 
-        display: 'grid', 
-        gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', 
-        gap: 40, 
-        alignItems: 'start' 
-      }}>
-        {/* 🔹 Медиа (картинка/видео) — с ограничением размера! */}
-        <div style={{ 
-          background: '#f8fafc', 
-          borderRadius: 12, 
-          padding: 20, 
-          display: 'flex', 
-          justifyContent: 'center',
-          alignItems: 'center'
-        }}>
-          {currentService.video_url ? (
-            <video 
-              controls 
-              autoPlay 
-              muted 
-              loop 
-              style={{ 
-                maxWidth: '100%', 
-                height: 'auto', 
-                maxHeight: 500, 
-                borderRadius: 8,
-                boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
-              }}
-            >
-              <source src={currentService.video_url} type="video/mp4" />
-              Ваш браузер не поддерживает видео.
-            </video>
-          ) : (
-            <img 
-              src={currentService.image_url || 'https://via.placeholder.com/400x300?text=No+Image'} 
-              alt={currentService.name} 
-              style={{ 
-                maxWidth: '100%', 
-                height: 'auto', 
-                maxHeight: 500,
-                borderRadius: 8,
-                objectFit: 'contain',
-                boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
-              }}
-              onError={(e) => { 
-                (e.target as HTMLImageElement).src = 'https://via.placeholder.com/400x300?text=No+Image'; 
-              }}
-            />
-          )}
+  const hasValidVideo = service.video_url && !hasVideoError;
+  const shouldCropVideo = service.name?.toLowerCase().includes('apple watch');
+
+  return (
+    <div className="container">
+      <div className="product-detail-card">
+        <div className="product-detail-image-section">
+          <div className="product-image-container">
+            {hasValidVideo ? (
+              <video 
+                autoPlay 
+                muted 
+                loop 
+                playsInline 
+                controls 
+                className="product-detail-media"
+                data-crop={shouldCropVideo ? 'true' : undefined}
+                poster={service.image_url || ''}
+                onError={() => setHasVideoError(true)}
+              >
+                <source src={service.video_url} type="video/mp4" />
+              </video>
+            ) : (
+              <img 
+                src={service.image_url || '/placeholder.svg'} 
+                alt={service.name} 
+                className="product-detail-media"
+                onError={(e) => { (e.target as HTMLImageElement).src = '/placeholder.svg'; }}
+              />
+            )}
+          </div>
         </div>
 
-        {/* 🔹 Информация о товаре */}
-        <div>
-          <h1 style={{ margin: '0 0 12px', fontSize: '2rem', fontWeight: 700 }}>
-            {currentService.name}
-          </h1>
+        <div className="product-detail-info">
+          <Link to="/catalog/" className="back-link">
+            ← Назад в каталог
+          </Link>
+
+          <h1 className="product-detail-title">{service.name}</h1>
           
-          <p style={{ 
-            fontSize: '1.5rem', 
-            fontWeight: 700, 
-            color: '#2563eb', 
-            margin: '0 0 16px' 
-          }}>
-            {currentService.price.toLocaleString('ru-RU')} ₽
-          </p>
-          
-          <p style={{ margin: '0 0 8px', color: '#64748b' }}>
-            <strong>Категория:</strong> {currentService.category}
-          </p>
-          
-          {currentService.brand && (
-            <p style={{ margin: '0 0 8px', color: '#64748b' }}>
-              <strong>Бренд:</strong> {currentService.brand}
-            </p>
-          )}
-          
-          {currentService.rating && (
-            <p style={{ margin: '0 0 16px', color: '#64748b' }}>
-              <strong>Рейтинг:</strong> ★ {currentService.rating}
-            </p>
-          )}
-          
-          <div style={{ margin: '24px 0' }}>
-            <h3 style={{ margin: '0 0 12px', fontSize: '1.25rem' }}>Описание</h3>
-            <p style={{ margin: 0, lineHeight: 1.6, color: '#334155' }}>
-              {currentService.description}
-            </p>
+          <div className="product-detail-price">
+            {service.price.toLocaleString('ru-RU')} ₽
+          </div>
+
+          <div className="product-detail-specs">
+            {service.category && (
+              <div className="spec-row">
+                <span className="spec-label">Категория</span>
+                <span className="spec-value">{service.category}</span>
+              </div>
+            )}
+            {service.brand && (
+              <div className="spec-row">
+                <span className="spec-label">Бренд</span>
+                <span className="spec-value">{service.brand}</span>
+              </div>
+            )}
+            {service.weight != null && (
+              <div className="spec-row">
+                <span className="spec-label">Вес</span>
+                <span className="spec-value">{service.weight} кг</span>
+              </div>
+            )}
+            {service.rating && (
+              <div className="spec-row">
+                <span className="spec-label">Рейтинг</span>
+                <span className="spec-value">★ {service.rating}</span>
+              </div>
+            )}
           </div>
           
-          {/* 🔹 Кнопка "Добавить в заявку" */}
-          <form method="POST" action={`/pages/order/add/${currentService.id}/`}>
-            <button 
-              type="submit" 
-              style={{
-                background: '#2563eb',
-                color: 'white',
-                border: 'none',
-                padding: '14px 32px',
-                borderRadius: 8,
-                fontSize: '1rem',
-                fontWeight: 600,
-                cursor: 'pointer',
-                transition: 'background 0.2s'
-              }}
-              onMouseOver={(e) => (e.currentTarget.style.background = '#1d4ed8')}
-              onMouseOut={(e) => (e.currentTarget.style.background = '#2563eb')}
+          {service.description && (
+            <div className="product-detail-description">
+              <h3>Описание</h3>
+              <p>{service.description}</p>
+            </div>
+          )}
+          
+          {user ? (
+            <button
+              onClick={handleAddToCart}
+              disabled={isGlobalLoading || addingToCart}
+              className="add-to-order-btn"
             >
-              Добавить в заявку
+              {addingToCart ? 'Добавление...' : 'Добавить в заказ'}
             </button>
-          </form>
+          ) : (
+            <Link to="/login/" state={{ from: `/service/${serviceId}/` }} className="login-to-add-btn">
+              Войдите, чтобы добавить в заказ
+            </Link>
+          )}
         </div>
       </div>
 
-      {/* 🔹 Блок "Похожие товары" */}
-      <section style={{ 
-        marginTop: 60, 
-        paddingTop: 30, 
-        borderTop: '1px solid #e2e8f0' 
-      }}>
-        <h3 style={{ margin: '0 0 20px', fontSize: '1.5rem' }}>
-          Похожие товары 
-          {useFallback && (
-            <span style={{ 
-              fontSize: '0.9rem', 
-              color: '#64748b', 
-              fontStyle: 'italic',
-              fontWeight: 400
-            }}>
-              (по категориям)
-            </span>
-          )}
-        </h3>
-        
-        {loadingSimilar ? (
-          <p style={{ color: '#64748b' }}>Загрузка рекомендаций...</p>
-        ) : similarServices.length === 0 ? (
-          <p style={{ color: '#64748b', fontStyle: 'italic' }}>
-            Похожие товары не найдены. Попробуйте выбрать другой товар.
-          </p>
-        ) : (
-          <div style={{ 
-            display: 'grid', 
-            gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', 
-            gap: 24 
+      {/* 🔹 Похожие товары */}
+      {relatedServices.length > 0 && (
+        <section className="related-products" style={{
+          marginTop: '60px',
+          padding: '40px 0',
+          borderTop: '2px solid #f0f0f0',
+        }}>
+          <h2 style={{
+            fontSize: '24px',
+            fontWeight: 700,
+            marginBottom: '32px',
+            color: '#0f172a',
           }}>
-            {similarServices.map(s => (
-              <a 
-                key={s.id} 
-                href={`/pages/service/${s.id}/`} 
-                style={{ 
-                  display: 'block', 
-                  border: '1px solid #e2e8f0', 
-                  borderRadius: 12, 
-                  padding: 16, 
-                  textDecoration: 'none', 
-                  color: 'inherit',
-                  transition: 'box-shadow 0.2s, transform 0.2s',
-                  background: 'white'
+            Похожие товары
+          </h2>
+          
+          <div className="products-grid" style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(4, 1fr)',
+            gap: '20px',
+          }}>
+            {relatedServices.map((related) => (
+              <div
+                key={related.id}
+                className="product-card"
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  background: 'white',
+                  borderRadius: '12px',
+                  overflow: 'hidden',
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+                  transition: 'all 0.2s',
+                  cursor: 'pointer',
+                  border: '1px solid #e0e0e0',
+                  height: '100%',
                 }}
-                onMouseOver={(e) => {
-                  (e.currentTarget as HTMLElement).style.boxShadow = '0 8px 24px rgba(0,0,0,0.12)';
-                  (e.currentTarget as HTMLElement).style.transform = 'translateY(-4px)';
-                }}
-                onMouseOut={(e) => {
-                  (e.currentTarget as HTMLElement).style.boxShadow = 'none';
-                  (e.currentTarget as HTMLElement).style.transform = 'none';
-                }}
+                onClick={() => window.location.href = `/service/${related.id}/`}
               >
-                <img 
-                  src={s.image_url || 'https://via.placeholder.com/200x150?text=No+Image'} 
-                  alt={s.name}
-                  style={{ 
-                    width: '100%', 
-                    height: 160, 
-                    objectFit: 'cover', 
-                    borderRadius: 8,
-                    background: '#f8fafc'
-                  }}
-                  onError={(e) => { 
-                    (e.target as HTMLImageElement).src = 'https://via.placeholder.com/200x150?text=No+Image'; 
-                  }}
-                />
-                <h4 style={{ 
-                  margin: '14px 0 6px', 
-                  fontSize: '1.1rem', 
-                  fontWeight: 600,
-                  lineHeight: 1.3
+                <div style={{
+                  width: '100%',
+                  height: '200px',
+                  background: 'white',
+                  border: '1px solid #d0d0d0',
+                  borderRadius: '12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '20px',
+                  boxSizing: 'border-box',
+                  marginBottom: '16px',
                 }}>
-                  {s.name}
-                </h4>
-                <p style={{ 
-                  fontWeight: 700, 
-                  color: '#2563eb', 
-                  margin: '0 0 4px',
-                  fontSize: '1.1rem'
-                }}>
-                  {s.price.toLocaleString('ru-RU')} ₽
-                </p>
-                <p style={{ 
-                  fontSize: '0.9rem', 
-                  color: '#64748b', 
-                  margin: 0 
-                }}>
-                  {s.category}
-                </p>
+                  <img 
+                    src={related.image_url || '/placeholder.svg'} 
+                    alt={related.name}
+                    style={{
+                      maxWidth: '100%',
+                      maxHeight: '100%',
+                      objectFit: 'contain',
+                      display: 'block',
+                    }}
+                    onError={(e) => { (e.target as HTMLImageElement).src = '/placeholder.svg'; }}
+                  />
+                </div>
                 
-                {/* 🔹 Показываем схожесть только если считали через transformer */}
-                {!useFallback && 'score' in s && typeof s.score === 'number' && (
-                  <p style={{ 
-                    fontSize: '0.85rem', 
-                    color: '#059669', 
-                    marginTop: 8,
-                    fontWeight: 500
-                  }}>
-                    Схожесть: {(s.score * 100).toFixed(1)}%
-                  </p>
-                )}
-              </a>
+                <div style={{
+                  padding: '0 20px 16px',
+                  flex: 1,
+                  display: 'flex',
+                  flexDirection: 'column',
+                }}>
+                  <h3 style={{
+                    fontSize: '15px',
+                    fontWeight: 600,
+                    color: '#333',
+                    marginBottom: '4px',
+                    lineHeight: 1.4,
+                    minHeight: '42px',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical',
+                  }}>{related.name}</h3>
+                  
+                  <p style={{
+                    fontSize: '13px',
+                    color: '#888',
+                    marginBottom: '8px',
+                  }}>{related.category}</p>
+                  
+                  <p style={{
+                    fontSize: '18px',
+                    fontWeight: 700,
+                    color: '#005bff',
+                    marginTop: 'auto',
+                  }}>{related.price.toLocaleString('ru-RU')} ₽</p>
+                </div>
+              </div>
             ))}
           </div>
-        )}
-      </section>
+        </section>
+      )}
     </div>
   );
 };

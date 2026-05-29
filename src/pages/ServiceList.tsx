@@ -1,348 +1,475 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Container, Row, Col, Form, Button } from 'react-bootstrap';
-import { ServiceCard } from '../components/ServiceCard';
-import type { Service } from '../types/Service';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
+import type { RootState, AppDispatch } from '../store';
+import { addToCartThunk } from '../store/thunks/orderThunks';
+import { showNotification } from '../store/slices/uiSlice';
+import { setFilters, clearFilters } from '../store/slices/filterSlice';
+import Loader from '../components/Loader';
 
-// 🔹 Константы кэширования
-const CACHE_PREFIX = 'voltmarket_services_';
-const DEFAULT_TTL = 300000; // 5 минут в миллисекундах
+interface Service {
+  id: number;
+  name: string;
+  price: number;
+  description: string;
+  category: string;
+  brand: string;
+  rating?: number;
+  image_url?: string;
+  status: 'active' | 'inactive' | 'deleted';
+}
 
-// 🔹 Mock-данные для Лабы 6 (требование: "fallback при отсутствии доступа")
-const mockServices: Service[] = [
-  { 
-    id: 1, 
-    name: 'iPhone 16 Pro', 
-    price: 119990, 
-    description: 'Флагманский смартфон с процессором A18 Pro и титановым корпусом', 
-    image_url: 'http://localhost:9000/services/iphone16pro.jpg', 
-    category: 'Смартфоны', 
-    brand: 'Apple', 
-    rating: 4.8 
-  },
-  { 
-    id: 2, 
-    name: 'MacBook Pro 16', 
-    price: 249990, 
-    description: 'Мощный ноутбук для профессионалов с чипом M3 Max', 
-    image_url: 'http://localhost:9000/services/macbookpro16.jpg', 
-    category: 'Ноутбуки', 
-    brand: 'Apple', 
-    rating: 4.9 
-  },
-  { 
-    id: 3, 
-    name: 'Sony WH-1000XM5', 
-    price: 34990, 
-    description: 'Беспроводные наушники с шумоподавлением премиум-класса', 
-    image_url: 'http://localhost:9000/services/sonywh1000xm5.jpg', 
-    category: 'Аудио', 
-    brand: 'Sony', 
-    rating: 4.7 
-  },
-  { 
-    id: 4, 
-    name: 'Samsung Galaxy S24 Ultra', 
-    price: 129990, 
-    description: 'Флагман на Android с ИИ-функциями и стилусом S Pen', 
-    image_url: 'http://localhost:9000/services/galaxys24ultra.jpg', 
-    category: 'Смартфоны', 
-    brand: 'Samsung', 
-    rating: 4.7 
-  },
-  { 
-    id: 5, 
-    name: 'LG OLED C3 55"', 
-    price: 149990, 
-    description: '4K OLED телевизор с поддержкой Dolby Vision и игровыми режимами', 
-    image_url: 'http://localhost:9000/services/lgoledc3.jpg', 
-    category: 'Телевизоры', 
-    brand: 'LG', 
-    rating: 4.9 
-  },
-  { 
-    id: 6, 
-    name: 'Dyson V15 Detect', 
-    price: 74990, 
-    description: 'Беспроводной пылесос с лазерной подсветкой и подсчётом частиц', 
-    image_url: 'http://localhost:9000/services/dysonv15.jpg', 
-    category: 'Бытовая техника', 
-    brand: 'Dyson', 
-    rating: 4.6 
-  },
-];
+const API_BASE = '/api';
+const CACHE_TTL = 5 * 60 * 1000; // 5 минут
+const CATALOG_CACHE_KEY = 'voltmarket_catalog';
 
-// 🔹 Хук для кэширования запросов (переиспользуемый)
-function useCachedFetch<T>(url: string, ttl: number = DEFAULT_TTL) {
-  const [data, setData] = useState<T | null>(null);
+// 🔹 Хук для кэширования каталога
+function useCatalogCache() {
+  const [data, setData] = useState<Service[] | null>(null);
   const [loading, setLoading] = useState(true);
-  const [cacheStatus, setCacheStatus] = useState<'HIT' | 'MISS' | 'ERROR' | 'LOADING'>('LOADING');
 
-  const fetchData = useCallback(async () => {
-    const cacheKey = CACHE_PREFIX + btoa(url); // Base64 для безопасного ключа
-    const now = Date.now();
-
-    // 1. Проверяем localStorage
+  const fetchCatalog = useCallback(async () => {
     try {
-      const cached = localStorage.getItem(cacheKey);
+      // 🔹 Проверяем кэш
+      const cached = localStorage.getItem(CATALOG_CACHE_KEY);
       if (cached) {
-        const { data: cachedData, timestamp, expiresAt } = JSON.parse(cached);
-        
-        if (now < expiresAt) {
-          // ✅ CACHE HIT
-          console.log(`[${new Date().toISOString()}] 🟢 CACHE HIT | key=${cacheKey} | ttl=${ttl}ms`);
+        const { data: cachedData, timestamp }: { data: Service[]; timestamp: number } = JSON.parse(cached);
+        if (Date.now() - timestamp < CACHE_TTL) {
           setData(cachedData);
-          setCacheStatus('HIT');
           setLoading(false);
           return;
-        } else {
-          // ⏰ TTL истёк
-          console.log(`[${new Date().toISOString()}] ⏰ CACHE EXPIRED | key=${cacheKey}`);
-          localStorage.removeItem(cacheKey);
         }
       }
-    } catch (e) {
-      console.warn(`[${new Date().toISOString()}] ⚠️ CACHE PARSE ERROR | key=${cacheKey}`, e);
-      localStorage.removeItem(cacheKey);
-    }
 
-    // 2. CACHE MISS -> fetch from API
-    console.log(`[${new Date().toISOString()}] 🔴 CACHE MISS | key=${cacheKey} | fetching from API...`);
-    setCacheStatus('MISS');
-    setLoading(true);
+      // 🔹 Запрашиваем с бэкенда
+      const response = await fetch(`${API_BASE}/services/`, {
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+      });
 
-    try {
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-      const json = await response.json();
-      
-      // Нормализация ответа (бэкенд возвращает {status, data} или просто массив)
-      const resultData = json.data || json;
-      
-      // Сохраняем в кэш
-      localStorage.setItem(cacheKey, JSON.stringify({
-        data: resultData,
-        timestamp: now,
-        expiresAt: now + ttl,
+      const result = await response.json();
+      const apiData: Service[] = result.data || result;
+
+      // 🔹 Сохраняем в кэш
+      localStorage.setItem(CATALOG_CACHE_KEY, JSON.stringify({ 
+        data: apiData, 
+        timestamp: Date.now() 
       }));
       
-      console.log(`[${new Date().toISOString()}] 💾 CACHE SET | key=${cacheKey} | ttl=${ttl}ms`);
-      
-      setData(resultData);
-      setCacheStatus('HIT'); // После сохранения считаем, что данные "из кэша" для следующих рендеров
-    } catch (error) {
-      console.error(`[${new Date().toISOString()}] ❌ CACHE ERROR | key=${cacheKey} | error=`, error);
-      setCacheStatus('ERROR');
-      throw error; // Пробрасываем ошибку дальше для fallback на mock
+      setData(apiData);
+    } catch (err) {
+      console.error('Failed to fetch catalog:', err);
+      setData([]);
     } finally {
       setLoading(false);
     }
-  }, [url, ttl]);
-
-  // Функция для ручной инвалидации кэша
-  const invalidateCache = useCallback(() => {
-    const cacheKey = CACHE_PREFIX + btoa(url);
-    localStorage.removeItem(cacheKey);
-    console.log(`[${new Date().toISOString()}] 🗑 CACHE INVALIDATE | key=${cacheKey}`);
-    fetchData(); // Перезагружаем данные
-  }, [url, fetchData]);
+  }, []);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    fetchCatalog();
+  }, [fetchCatalog]);
 
-  return { data, loading, cacheStatus, invalidateCache };
+  const invalidateCache = useCallback(() => {
+    localStorage.removeItem(CATALOG_CACHE_KEY);
+    fetchCatalog();
+  }, [fetchCatalog]);
+
+  return { data, loading, refetch: invalidateCache };
 }
 
-// 🔹 Основной компонент
 const ServiceList: React.FC = () => {
-  const [search, setSearch] = useState('');
-  const [category, setCategory] = useState('Все');
-  const [priceRange, setPriceRange] = useState('');
+  const navigate = useNavigate();
+  const location = useLocation();
+  const dispatch = useDispatch<AppDispatch>();
+  const [addingId, setAddingId] = useState<number | null>(null);
 
-  // Формируем уникальный URL с параметрами для кэширования
-  const params = new URLSearchParams();
-  if (search) params.append('name', search);
-  if (category !== 'Все') params.append('category', category);
-  if (priceRange) {
-    const [min, max] = priceRange.split('-');
-    params.append('price_min', min);
-    if (max) params.append('price_max', max);
-  }
-  const apiUrl = `/api/services/?${params.toString()}`;
+  // 🔹 Получаем фильтры из Redux
+  const filters = useSelector((state: RootState) => state.filters);
+  const user = useSelector((state: RootState) => state.auth.user);
 
-  // Используем наш хук кэширования
-  const { 
-    data: apiData, 
-    loading: apiLoading, 
-    cacheStatus, 
-    invalidateCache 
-  } = useCachedFetch<Service[]>(apiUrl);
+  // 🔹 Локальные состояния для инпутов
+  const [localSearch, setLocalSearch] = useState(filters.search);
+  const [localCategory, setLocalCategory] = useState(filters.category);
+  const [localPriceFrom, setLocalPriceFrom] = useState(filters.priceFrom?.toString() || '');
+  const [localPriceTo, setLocalPriceTo] = useState(filters.priceTo?.toString() || '');
 
-  // Состояние для данных (могут быть из API или mock)
-  const [services, setServices] = useState<Service[]>([]);
-  const [usingMock, setUsingMock] = useState(false);
+  const { data: allServices, loading } = useCatalogCache();
 
-  // Обработка данных: если API упал -> fallback на mock
-  useEffect(() => {
-    if (apiData && Array.isArray(apiData)) {
-      setServices(apiData);
-      setUsingMock(false);
-    }
-  }, [apiData]);
-
-  // 🔹 Динамический список категорий
-  const categories = ['Все', ...new Set(services.map(s => s.category))];
-
-  // 🔹 Клиентская фильтрация (для мгновенного отклика интерфейса)
-  const filtered = services.filter(service => {
-    const matchSearch = service.name.toLowerCase().includes(search.toLowerCase());
-    const matchCategory = category === 'Все' || service.category === category;
+  // 🔹 Фильтрация товаров (мемоизируем)
+  const services = useMemo(() => {
+    if (!allServices) return [];
     
-    let matchPrice = true;
-    if (priceRange) {
-      const [min, max] = priceRange.split('-').map(Number);
-      if (max) {
-        matchPrice = service.price >= min && service.price <= max;
-      } else {
-        matchPrice = service.price >= min;
+    return allServices.filter(service => {
+      if (filters.search && !service.name.toLowerCase().includes(filters.search.toLowerCase())) {
+        return false;
       }
-    }
-    
-    return matchSearch && matchCategory && matchPrice;
-  });
-
-  const handleAddToCart = (id: number) => {
-    console.log(`🛒 Добавление товара ${id} в корзину`);
-  };
-
-  // 🔹 Кнопка сброса ВСЕГО кэша (для демо)
-  const handleClearAllCache = () => {
-    Object.keys(localStorage).forEach(key => {
-      if (key.startsWith(CACHE_PREFIX)) {
-        localStorage.removeItem(key);
-        console.log(`[${new Date().toISOString()}] 🗑 CACHE CLEAR | key=${key}`);
+      if (filters.category && filters.category !== 'all' && service.category !== filters.category) {
+        return false;
       }
+      if (filters.priceFrom !== null && service.price < filters.priceFrom) {
+        return false;
+      }
+      if (filters.priceTo !== null && service.price > filters.priceTo) {
+        return false;
+      }
+      return true;
     });
-    window.location.reload();
+  }, [allServices, filters]);
+
+  // 🔹 Синхронизация фильтров из URL при загрузке
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const urlSearch = params.get('search') || '';
+    const urlCategory = params.get('category') || '';
+    const urlPriceFrom = params.get('price_from');
+    const urlPriceTo = params.get('price_to');
+
+    // Обновляем только если фильтры в URL отличаются от текущих
+    if (urlSearch !== filters.search || urlCategory !== filters.category) {
+      dispatch(setFilters({
+        search: urlSearch,
+        category: urlCategory,
+        priceFrom: urlPriceFrom ? Number(urlPriceFrom) : null,
+        priceTo: urlPriceTo ? Number(urlPriceTo) : null,
+      }));
+    }
+    
+    // Синхронизируем локальные инпуты
+    setLocalSearch(urlSearch);
+    setLocalCategory(urlCategory);
+    setLocalPriceFrom(urlPriceFrom || '');
+    setLocalPriceTo(urlPriceTo || '');
+  }, [location.search, dispatch, filters]);
+
+  // 🔹 Применение фильтров
+  const handleApplyFilters = () => {
+    const fromValue = localPriceFrom ? Math.max(0, Number(localPriceFrom)) : null;
+    const toValue = localPriceTo ? Math.max(0, Number(localPriceTo)) : null;
+    
+    const newFilters = {
+      search: localSearch,
+      category: localCategory,
+      priceFrom: fromValue,
+      priceTo: toValue,
+    };
+    
+    dispatch(setFilters(newFilters));
+
+    // 🔹 Обновляем URL
+    const params = new URLSearchParams();
+    if (newFilters.search) params.set('search', newFilters.search);
+    if (newFilters.category && newFilters.category !== 'all') params.set('category', newFilters.category);
+    if (newFilters.priceFrom !== null) params.set('price_from', String(newFilters.priceFrom));
+    if (newFilters.priceTo !== null) params.set('price_to', String(newFilters.priceTo));
+    
+    navigate(`/catalog/?${params}`, { replace: true });
   };
 
-  // 🔹 Индикатор статуса кэша
-  const CacheBadge = () => {
-    const colors = {
-      HIT: '#28a745',    // зелёный
-      MISS: '#dc3545',   // красный
-      ERROR: '#6c757d',  // серый
-      LOADING: '#ffc107' // жёлтый
-    };
-    const labels = {
-      HIT: '🟢 Cache Hit',
-      MISS: '🔴 Cache Miss',
-      ERROR: '⚪ Error',
-      LOADING: '🔄 Loading'
-    };
-
-    return (
-      <div style={{
-        position: 'fixed',
-        top: 70,
-        right: 20,
-        padding: '6px 12px',
-        borderRadius: '20px',
-        color: '#fff',
-        fontSize: '12px',
-        fontWeight: 'bold',
-        backgroundColor: colors[cacheStatus],
-        zIndex: 9999,
-        boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
-        transition: 'background-color 0.2s'
-      }}>
-        {labels[cacheStatus]}
-        {usingMock && ' (mock)'}
-      </div>
-    );
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleApplyFilters();
+    }
   };
 
-  if (apiLoading && services.length === 0) {
-    return (
-      <Container className="py-5 text-center">
-        <CacheBadge />
-        <div className="spinner-border text-primary" role="status">
-          <span className="visually-hidden">Загрузка...</span>
-        </div>
-        <p className="mt-3">Загрузка каталога...</p>
-      </Container>
-    );
+  const handleResetFilters = () => {
+    dispatch(clearFilters());
+    setLocalSearch('');
+    setLocalCategory('');
+    setLocalPriceFrom('');
+    setLocalPriceTo('');
+    navigate('/catalog/', { replace: true });
+  };
+
+  const handleAddToCart = async (e: React.MouseEvent, service: Service) => {
+    e.stopPropagation();
+    
+    if (!user) {
+      navigate('/login/', { state: { from: '/catalog/' } });
+      dispatch(showNotification({ 
+        type: 'info', 
+        message: 'Войдите, чтобы добавить товар в заказ' 
+      }));
+      return;
+    }
+    
+    setAddingId(service.id);
+    try {
+      const result = await dispatch(addToCartThunk(service.id));
+      if (addToCartThunk.fulfilled.match(result)) {
+        dispatch(showNotification({ type: 'success', message: `"${service.name}" добавлен в заказ` }));
+      } else {
+        dispatch(showNotification({ type: 'error', message: 'Ошибка добавления' }));
+      }
+    } catch {
+      dispatch(showNotification({ type: 'error', message: 'Ошибка сети' }));
+    }
+    setAddingId(null);
+  };
+
+  // 🔹 Список категорий для фильтра
+  const categories = useMemo(() => {
+    if (!allServices) return ['all'];
+    const unique = [...new Set(allServices.map(s => s.category))];
+    return ['all', ...unique];
+  }, [allServices]);
+
+  if (loading && !allServices) {
+    return <Loader size="large" text="Загрузка каталога..." />;
   }
 
   return (
-    <Container className="py-4">
-      <CacheBadge />
-      
-      <div className="d-flex justify-content-between align-items-center mb-4">
-        <h2>Каталог товаров</h2>
-        
-        {/* Кнопка сброса кэша (только для демо) */}
-        <Button 
-          variant="outline-danger" 
-          size="sm" 
-          onClick={handleClearAllCache}
-          title="Очистить кэш и перезагрузить данные"
-        >
-          🗑 Сбросить кэш
-        </Button>
+    <div className="container">
+      <div className="catalog-header">
+        <h2 className="page-title">Каталог товаров</h2>
       </div>
 
-      {/* Фильтры */}
-      <Row className="mb-4 g-3">
-        <Col md={5}>
-          <Form.Control
-            type="text"
-            placeholder="Поиск по названию..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-          />
-        </Col>
-        <Col md={3}>
-          <Form.Select value={category} onChange={e => setCategory(e.target.value)}>
-            {categories.map(cat => (
-              <option key={cat} value={cat}>{cat}</option>
-            ))}
-          </Form.Select>
-        </Col>
-        <Col md={3}>
-          <Form.Select value={priceRange} onChange={e => setPriceRange(e.target.value)}>
-            <option value="">Все цены</option>
-            <option value="0-50000">до 50 000 ₽</option>
-            <option value="50000-100000">50 000 – 100 000 ₽</option>
-            <option value="100000-999999">от 100 000 ₽</option>
-          </Form.Select>
-        </Col>
-      </Row>
-
-      {/* Список карточек */}
-      <Row xs={1} md={2} lg={3} className="g-4">
-        {filtered.map((service) => (
-          <Col key={service.id}>
-            <ServiceCard 
-              service={service} 
-              onAddToCart={handleAddToCart} 
+      {/* 🔹 Панель фильтров */}
+      <div className="filters-panel">
+        <div className="filter-row">
+          <div className="filter-group">
+            <label>Поиск:</label>
+            <input
+              type="text"
+              value={localSearch}
+              onChange={(e) => setLocalSearch(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Название товара..."
+              className="filter-input"
             />
-          </Col>
-        ))}
-      </Row>
+          </div>
 
-      {filtered.length === 0 && !apiLoading && (
-        <p className="text-center mt-5 text-muted">
-          {usingMock 
-            ? 'Mock-данные: товары не найдены. Попробуйте изменить фильтры.' 
-            : 'Товары не найдены. Попробуйте изменить фильтры.'
-          }
-        </p>
+          <div className="filter-group">
+            <label>Категория:</label>
+            <select
+              value={localCategory}
+              onChange={(e) => setLocalCategory(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="filter-select"
+            >
+              {categories.map(cat => (
+                <option key={cat} value={cat}>
+                  {cat === 'all' ? 'Все категории' : cat}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="filter-group">
+            <label>Цена от:</label>
+            <input
+              type="number"
+              min="0"
+              value={localPriceFrom}
+              onChange={(e) => setLocalPriceFrom(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="0"
+              className="filter-input"
+            />
+          </div>
+
+          <div className="filter-group">
+            <label>Цена до:</label>
+            <input
+              type="number"
+              min="0"
+              value={localPriceTo}
+              onChange={(e) => setLocalPriceTo(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="999999"
+              className="filter-input"
+            />
+          </div>
+
+          <div className="filter-buttons">
+            <button onClick={handleApplyFilters} className="filter-btn filter-apply">
+              Применить
+            </button>
+            <button onClick={handleResetFilters} className="filter-btn filter-reset">
+              Сбросить
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* 🔹 Сетка товаров */}
+      {services.length > 0 ? (
+        <div className="products-grid">
+          {services.map((service) => (
+            <div
+              key={service.id}
+              className="product-card"
+              onClick={() => navigate(`/service/${service.id}/`)}
+              role="button"
+              tabIndex={0}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                background: 'white',
+                borderRadius: '12px',
+                overflow: 'hidden',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+                transition: 'all 0.2s',
+                cursor: 'pointer',
+                border: '1px solid #e0e0e0',
+                height: '100%',
+              }}
+              onMouseOver={(e) => {
+                (e.currentTarget as HTMLElement).style.boxShadow = '0 8px 24px rgba(0,0,0,0.12)';
+                (e.currentTarget as HTMLElement).style.borderColor = '#005bff';
+                (e.currentTarget as HTMLElement).style.transform = 'translateY(-4px)';
+              }}
+              onMouseOut={(e) => {
+                (e.currentTarget as HTMLElement).style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)';
+                (e.currentTarget as HTMLElement).style.borderColor = '#e0e0e0';
+                (e.currentTarget as HTMLElement).style.transform = 'translateY(0)';
+              }}
+            >
+              {/* Изображение */}
+              <div style={{
+                width: '100%',
+                height: '240px',
+                background: 'white',
+                border: '1px solid #d0d0d0',
+                borderRadius: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '20px',
+                boxSizing: 'border-box',
+                marginBottom: '16px',
+              }}>
+                <img 
+                  src={service.image_url || '/placeholder.svg'} 
+                  alt={service.name}
+                  style={{
+                    maxWidth: '100%',
+                    maxHeight: '100%',
+                    objectFit: 'contain',
+                    display: 'block',
+                    transition: 'transform 0.3s ease',
+                  }}
+                  onMouseOver={(e) => {
+                    (e.target as HTMLImageElement).style.transform = 'scale(1.05)';
+                  }}
+                  onMouseOut={(e) => {
+                    (e.target as HTMLImageElement).style.transform = 'scale(1)';
+                  }}
+                  onError={(e) => { (e.target as HTMLImageElement).src = '/placeholder.svg'; }}
+                  loading="lazy"
+                />
+              </div>
+              
+              {/* Информация */}
+              <div style={{
+                padding: '0 20px 16px',
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+              }}>
+                <h3 style={{
+                  fontSize: '15px',
+                  fontWeight: 600,
+                  color: '#333',
+                  marginBottom: '4px',
+                  lineHeight: 1.4,
+                  minHeight: '42px',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  display: '-webkit-box',
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: 'vertical',
+                }}>{service.name}</h3>
+                
+                <p style={{
+                  fontSize: '13px',
+                  color: '#888',
+                  marginBottom: '8px',
+                }}>{service.category}</p>
+                
+                {service.rating && (
+                  <p style={{
+                    fontSize: '13px',
+                    color: '#ffa500',
+                    marginBottom: '12px',
+                    fontWeight: 500,
+                  }}>★ {service.rating}</p>
+                )}
+                
+                <p style={{
+                  fontSize: '18px',
+                  fontWeight: 700,
+                  color: '#005bff',
+                  marginTop: 'auto',
+                }}>{service.price.toLocaleString('ru-RU')} ₽</p>
+              </div>
+              
+              {/* Кнопка добавления */}
+              <button
+                onClick={(e) => handleAddToCart(e, service)}
+                disabled={addingId === service.id}
+                style={{
+                  margin: '0 16px 16px',
+                  padding: '10px 16px',
+                  background: addingId === service.id ? '#ccc' : '#005bff',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  cursor: addingId === service.id ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.2s',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                }}
+                onMouseOver={(e) => {
+                  if (addingId !== service.id) {
+                    (e.currentTarget as HTMLElement).style.background = '#0047cc';
+                    (e.currentTarget as HTMLElement).style.transform = 'translateY(-1px)';
+                  }
+                }}
+                onMouseOut={(e) => {
+                  if (addingId !== service.id) {
+                    (e.currentTarget as HTMLElement).style.background = '#005bff';
+                    (e.currentTarget as HTMLElement).style.transform = 'translateY(0)';
+                  }
+                }}
+                aria-label={`Добавить ${service.name} в заказ`}
+              >
+                {addingId === service.id ? (
+                  <>
+                    <span>⏳</span>
+                    <span>Добавление...</span>
+                  </>
+                ) : (
+                  <>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{display: 'block'}}>
+                      <circle cx="9" cy="21" r="1"/>
+                      <circle cx="20" cy="21" r="1"/>
+                      <path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/>
+                      <path d="M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17"/>
+                    </svg>
+                    <span>В заказ</span>
+                  </>
+                )}
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-cart">
+          <p>Товары не найдены</p>
+          {(filters.search || filters.category || filters.priceFrom !== null || filters.priceTo !== null) && (
+            <button onClick={handleResetFilters} className="btn btn-secondary">
+              Сбросить фильтры
+            </button>
+          )}
+        </div>
       )}
-    </Container>
+    </div>
   );
 };
 
